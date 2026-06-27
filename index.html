@@ -44,12 +44,6 @@
             transform: none;
         }
 
-        /* fullscreen: ไม่มี padding ให้หนังสือเต็มจอ */
-        :fullscreen #bookContainer,
-        :-webkit-full-screen #bookContainer {
-            padding: 0;
-        }
-
         #flipbook { margin: 0 auto; }
         .page { background: white; overflow: hidden; }
         .page canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
@@ -97,10 +91,11 @@
             'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
         let pageFlip, autoFlipInterval;
-        let isAutoPlaying = false;
-        let isFlipping    = false;
-        let totalPages    = 0;
-        let isFullscreen  = false; // track สถานะ fullscreen
+        let isAutoPlaying  = false;
+        let isFlipping     = false;
+        let totalPages     = 0;
+        let isFullscreen   = false;
+        let savedPageIndex = 0; // จำหน้าปัจจุบันไว้ก่อน reinit
 
         const currentEbook = "catalog (1).pdf";
         const flipSpeed    = 5000;
@@ -111,12 +106,8 @@
         window.addEventListener('DOMContentLoaded', () => {
             loadPDF(`ebook/${currentEbook}`);
             setupFullscreenListener();
-
-            // แก้บัค: reload เฉพาะตอนหมุนจอจริงๆ ไม่ใช่ตอนกด fullscreen
             window.addEventListener('orientationchange', () => {
-                if (!isFullscreen) {
-                    setTimeout(() => location.reload(), 300);
-                }
+                if (!isFullscreen) setTimeout(() => location.reload(), 300);
             });
         });
 
@@ -133,22 +124,71 @@
         function setupFullscreenListener() {
             const onChange = () => {
                 isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
-
                 document.getElementById('fsIcon').innerText = isFullscreen ? '✕' : '⛶';
                 document.getElementById('fsText').innerText  = isFullscreen ? 'ออกจากเต็มจอ' : 'เต็มจอ';
 
-                // resize PageFlip ให้พอดีจอใหม่หลัง fullscreen เปลี่ยน
-                if (pageFlip) {
-                    setTimeout(() => {
-                        pageFlip.update();
-                    }, 300);
-                }
+                // รอให้ browser ปรับขนาดจอเสร็จก่อน แล้วค่อย reinit
+                setTimeout(() => reinitPageFlip(), 400);
             };
             document.addEventListener('fullscreenchange',       onChange);
             document.addEventListener('webkitfullscreenchange', onChange);
         }
 
-        // ── Load PDF ────────────────────────────────────────────────
+        // ── Reinit PageFlip ด้วยขนาดจอปัจจุบัน ──────────────────
+        function reinitPageFlip() {
+            if (!pageFlip) return;
+
+            // จำหน้าปัจจุบัน
+            savedPageIndex = pageFlip.getCurrentPageIndex();
+
+            // หยุด autoflip ชั่วคราว
+            const wasPlaying = isAutoPlaying;
+            if (wasPlaying) stopAutoFlip();
+
+            // destroy instance เดิม
+            try { pageFlip.destroy(); } catch(e) {}
+
+            // สร้างใหม่ด้วยขนาดจอจริงตอนนี้
+            const container  = document.getElementById('bookContainer');
+            const flipbookEl = document.getElementById('flipbook');
+
+            // ปรับ padding ของ container ตาม fullscreen
+            container.style.padding = isFullscreen ? '0' : '20px';
+
+            const W = window.innerWidth;
+            const H = window.innerHeight;
+            const isPortrait = H > W;
+            const useSingle  = isIPad && isPortrait;
+
+            pageFlip = new St.PageFlip(flipbookEl, {
+                width:       useSingle ? W : 841,
+                height:      useSingle ? H : 595,
+                size:        'stretch',
+                minWidth:    useSingle ? W : 400,
+                maxWidth:    isFullscreen ? W : 1600,
+                minHeight:   useSingle ? H : 283,
+                maxHeight:   isFullscreen ? H : 1131,
+                drawShadow:  true,
+                showCover:   true,
+                usePortrait: useSingle,
+                startPage:   savedPageIndex
+            });
+
+            pageFlip.on('flip', () => { isFlipping = true; });
+            pageFlip.on('changeState', (e) => {
+                if (e.data === 'read') {
+                    isFlipping = false;
+                    if (pageFlip.getCurrentPageIndex() >= totalPages - 1) stopAutoFlip();
+                }
+            });
+            pageFlip.on('init', () => {
+                if (wasPlaying) startAutoFlip();
+            });
+
+            pageFlip.loadFromHTML(document.querySelectorAll('#flipbook .page'));
+        }
+
+        // ── Load PDF (ครั้งแรก) ─────────────────────────────────────
         async function loadPDF(fileUrl) {
             const overlay    = document.getElementById('overlay');
             const flipbookEl = document.getElementById('flipbook');
@@ -179,17 +219,19 @@
                     flipbookEl.appendChild(pageDiv);
                 }
 
-                const isPortrait = window.innerHeight > window.innerWidth;
+                const W = window.innerWidth;
+                const H = window.innerHeight;
+                const isPortrait = H > W;
                 const useSingle  = isIPad && isPortrait;
 
                 pageFlip = new St.PageFlip(flipbookEl, {
-                    width:       useSingle ? window.innerWidth  : 841,
-                    height:      useSingle ? window.innerHeight : 595,
+                    width:       useSingle ? W : 841,
+                    height:      useSingle ? H : 595,
                     size:        'stretch',
-                    minWidth:    useSingle ? window.innerWidth  : 400,
-                    maxWidth:    useSingle ? window.innerWidth  : 1600,
-                    minHeight:   useSingle ? window.innerHeight : 283,
-                    maxHeight:   useSingle ? window.innerHeight : 1131,
+                    minWidth:    useSingle ? W : 400,
+                    maxWidth:    1600,
+                    minHeight:   useSingle ? H : 283,
+                    maxHeight:   1131,
                     drawShadow:  true,
                     showCover:   true,
                     usePortrait: useSingle,
@@ -211,7 +253,6 @@
                         overlay.addEventListener('transitionend', () => {
                             overlay.style.display = 'none';
                         }, { once: true });
-
                         document.getElementById('playPauseBtn').classList.remove('hidden');
                         document.getElementById('fullscreenBtn').classList.remove('hidden');
                         startAutoFlip();
