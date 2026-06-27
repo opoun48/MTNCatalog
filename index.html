@@ -199,7 +199,11 @@
                 }
 
                 // ดีเลย์ 400ms รอหน้าจอนิ่งแล้วประกอบร่างหนังสือใหม่
-                setTimeout(reinit, 400);
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        reinit();
+                    });
+                });
             });
         });
 
@@ -280,7 +284,10 @@
             pageFlip.loadFromHTML(document.querySelectorAll('#flipbook .page'));
         }
 
+        let reinitLock = false;
         function reinit() {
+            if (reinitLock) return;
+            reinitLock = true;
             if (!pageCanvases.length) return; // ป้องกันการรีเซ็ตถ้ายังโหลดไฟล์ไม่เสร็จ
             const wasPlaying = isPlaying;
             if (wasPlaying) stopAutoFlip();
