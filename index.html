@@ -30,7 +30,7 @@
         }
         #overlay.done { opacity: 0; pointer-events: none; }
 
-        /* Viewer: ซ่อนออกไปนอก viewport ระหว่าง init */
+        /* Viewer */
         #viewer {
             position: fixed;
             inset: 0;
@@ -39,13 +39,10 @@
             justify-content: center;
             background: #0f172a;
             transform: translateX(-99999px);
-            padding: 20px; /* padding ปกติ */
+            padding: 20px;
         }
         #viewer.visible  { transform: none; }
-        
-        /* เมื่อเข้าสู่โหมด Fullscreen ให้เคลียร์ Padding ออกให้หมด */
         #viewer.fullmode { padding: 0; }
-        #viewer.fullmode #flipbook { width: 100vw; height: 100vh; }
 
         #flipbook { margin: 0 auto; }
         .page { background: white; overflow: hidden; }
@@ -92,7 +89,7 @@
 
         const EBOOK     = "catalog (1).pdf";
         const FLIP_MS   = 5000;
-        const PADDING   = 20; // px รอบข้างตอนไม่ fullscreen
+        const PADDING   = 20;
 
         let pageFlip, autoFlipInterval;
         let isPlaying   = false;
@@ -100,6 +97,10 @@
         let totalPages  = 0;
         let isFull      = false;
         let savedPage   = 0;
+        
+        // ตัวแปรเก็บขนาดจริงของไฟล์ PDF
+        let pdfBaseW = 595; 
+        let pdfBaseH = 841;
 
         const isIPad = /iPad/i.test(navigator.userAgent) ||
                        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -117,7 +118,7 @@
             return { W, H, single };
         }
 
-        /* ── Fullscreen API & Pseudo Fullscreen ──────────── */
+        /* ── Fullscreen ──────────────────────────────────── */
         function toggleFullscreen() {
             isFull = !isFull;
             const viewer = document.getElementById('viewer');
@@ -125,29 +126,25 @@
 
             if (isFull) {
                 viewer.classList.add('fullmode');
-                // จัดการ Fullscreen API ให้ครอบคลุมทุก Browser (รวม Safari บน iMac)
                 try {
                     if (docEl.requestFullscreen) docEl.requestFullscreen();
                     else if (docEl.webkitRequestFullscreen) docEl.webkitRequestFullscreen();
-                    else if (docEl.msRequestFullscreen) docEl.msRequestFullscreen();
-                } catch(e) { console.warn("Native fullscreen not fully supported."); }
+                } catch(e) {}
             } else {
                 viewer.classList.remove('fullmode');
                 try {
                     if (document.exitFullscreen) document.exitFullscreen();
                     else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-                    else if (document.msExitFullscreen) document.msExitFullscreen();
                 } catch(e) {}
             }
 
             document.getElementById('fsIcon').innerText = isFull ? '✕' : '⛶';
             document.getElementById('fsText').innerText  = isFull ? 'ออกจากเต็มจอ' : 'เต็มจอ';
 
-            // เพิ่ม Delay เป็น 500ms เพื่อให้ Safari บน iPad ซ่อนแถบ URL และเปลี่ยน Layout ก่อนวาดขนาดใหม่
-            setTimeout(reinit, 500);
+            // ดีเลย์รอเบราว์เซอร์จัดการหน้าจอให้เรียบร้อยแล้วค่อยวาดขนาดใหม่
+            setTimeout(reinit, 400);
         }
 
-        /* sync isFull กับ native fullscreen ที่ถูกปิดจากปุ่ม Esc */
         ['fullscreenchange','webkitfullscreenchange'].forEach(ev => {
             document.addEventListener(ev, () => {
                 const nativeFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
@@ -156,12 +153,12 @@
                     document.getElementById('viewer').classList.remove('fullmode');
                     document.getElementById('fsIcon').innerText = '⛶';
                     document.getElementById('fsText').innerText  = 'เต็มจอ';
-                    setTimeout(reinit, 500);
+                    setTimeout(reinit, 400);
                 }
             });
         });
 
-        /* ── Reinit PageFlip ด้วยขนาดใหม่ ──────────────── */
+        /* ── Reinit & Build PageFlip ─────────────────────── */
         function reinit() {
             if (!pageFlip) return;
             savedPage = pageFlip.getCurrentPageIndex();
@@ -180,33 +177,18 @@
             const { W, H, single } = bookDims();
 
             pageFlip = new St.PageFlip(el, {
-                // ตั้งค่าขนาดเริ่มต้นของกระดาษ (อ้างอิงสัดส่วน A4)
-                width:       595,
-                height:      841,
-                // แก้กลับมาใช้ 'stretch' ตามที่ไลบรารี่รองรับ
+                width:       pdfBaseW, // ใช้สัดส่วนที่ดึงมาจาก PDF โดยตรง
+                height:      pdfBaseH,
                 size:        'stretch',
                 minWidth:    100,
-                // ปลดล็อคเพดานขนาด เพื่อให้รองรับการยืดบนจอ iMac (2K/4K/5K)
-                maxWidth:    5000,    
+                maxWidth:    W,        // ยืดได้สูงสุดเท่าขอบเขตหน้าจอในขณะนั้น (ป้องกัน memory ค้าง)
                 minHeight:   100,
-                maxHeight:   5000,    
+                maxHeight:   H,        // ยืดได้สูงสุดเท่าขอบเขตหน้าจอในขณะนั้น
                 drawShadow:  true,
                 showCover:   true,
                 usePortrait: single,
                 startPage:   savedPage
             });
-
-            pageFlip.on('flip', () => { isFlipping = true; });
-            pageFlip.on('changeState', e => {
-                if (e.data === 'read') {
-                    isFlipping = false;
-                    if (pageFlip.getCurrentPageIndex() >= totalPages - 1) stopAutoFlip();
-                }
-            });
-            pageFlip.on('init', () => { if (onReady) onReady(); });
-
-            pageFlip.loadFromHTML(document.querySelectorAll('#flipbook .page'));
-        }
 
             pageFlip.on('flip', () => { isFlipping = true; });
             pageFlip.on('changeState', e => {
@@ -232,10 +214,17 @@
                 const pdf  = await pdfjsLib.getDocument(new Uint8Array(await res.arrayBuffer())).promise;
                 totalPages = pdf.numPages;
 
+                // --- อ่านขนาดกว้าง/ยาว ของ PDF หน้าแรกมาตั้งเป็น Base Size ---
+                const firstPage = await pdf.getPage(1);
+                const baseVp = firstPage.getViewport({ scale: 1 });
+                pdfBaseW = baseVp.width;
+                pdfBaseH = baseVp.height;
+                // -------------------------------------------------------------
+
                 const frag = document.createDocumentFragment();
                 for (let n = 1; n <= totalPages; n++) {
                     const page     = await pdf.getPage(n);
-                    const viewport = page.getViewport({ scale: 2.2 });
+                    const viewport = page.getViewport({ scale: 2.2 }); // scale ชัดสำหรับจอ Retina
                     const canvas   = document.createElement('canvas');
                     canvas.width   = viewport.width;
                     canvas.height  = viewport.height;
@@ -301,7 +290,7 @@
             }
         }
 
-        /* ── หมุนจอ (ไม่ใช่ตอน fullscreen) ──────────────── */
+        /* ── Orientation ─────────────────────────────────── */
         window.addEventListener('orientationchange', () => {
             const nativeFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
             if (!nativeFS) setTimeout(() => location.reload(), 300);
