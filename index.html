@@ -38,25 +38,39 @@
             align-items: center;
             justify-content: center;
             background: #0f172a;
-            transform: translateX(-99999px);
+            opacity: 0;
+            transition: opacity 0.3s ease;
             padding: 20px;
         }
-        #viewer.visible  { transform: none; }
+        #viewer.visible  { opacity: 1; }
         #viewer.fullmode { padding: 0; }
 
-        #flipbook { margin: 0 auto; }
-        .page { background: white; overflow: hidden; }
+        #flipbook { 
+            margin: 0 auto; 
+            display: none; /* ซ่อนไว้ก่อนจนกว่าจะเริ่มสั่ง init ของ page-flip */
+        }
+        #flipbook.ready { display: block; }
+        
+        .page { background: white; overflow: hidden; height: 100%; width: 100%; cursor: pointer; }
         .page canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
 
-        /* ปุ่ม */
+        /* ปุ่มควบคุมแบบสลวย */
         .ctrl {
             position: fixed;
             top: 20px;
             z-index: 10000;
             backdrop-filter: blur(8px);
+            transition: all 0.2s ease;
         }
         #playPauseBtn { right: 170px; }
         #fullscreenBtn { right: 20px; }
+        
+        /* สไตล์เสริมเพื่อให้กดบน Mobile ถนัดขึ้น */
+        @media (max-width: 640px) {
+            .ctrl { top: 10px; padding: 6px 12px; font-size: 12px; }
+            #playPauseBtn { right: 130px; }
+            #fullscreenBtn { right: 10px; }
+        }
     </style>
 </head>
 <body>
@@ -98,7 +112,6 @@
         let isFull      = false;
         let savedPage   = 0;
         
-        // ตัวแปรเก็บขนาดจริงของไฟล์ PDF
         let pdfBaseW = 595; 
         let pdfBaseH = 841;
 
@@ -109,13 +122,45 @@
         function viewW() { return window.innerWidth;  }
         function viewH() { return window.innerHeight; }
 
+        // คำนวณขนาดที่เหมาะสมที่สุดโดยอิงจากอัตราส่วน (Aspect Ratio) ของ PDF
         function bookDims() {
             const pad = isFull ? 0 : PADDING * 2;
-            const W   = viewW() - pad;
-            const H   = viewH() - pad;
-            const isPortrait = H > W;
-            const single = isIPad && isPortrait;
-            return { W, H, single };
+            const maxW = viewW() - pad;
+            const maxH = viewH() - pad;
+            
+            const isPortrait = maxH > maxW;
+            const single = (isIPad && isPortrait) || maxW < 768; // บังคับหน้าเดี่ยวบนมือถือด้วย
+
+            const pdfRatio = pdfBaseW / pdfBaseH;
+            
+            let finalW, finalH;
+            
+            if (single) {
+                // หน้าเดี่ยว: เทียบอัตราส่วนหน้าเดียวตรงๆ
+                if (maxW / maxH > pdfRatio) {
+                    finalH = maxH;
+                    finalW = maxH * pdfRatio;
+                } else {
+                    finalW = maxW;
+                    finalH = maxW / pdfRatio;
+                }
+            } else {
+                // หน้าคู่: สัดส่วนความกว้างจะต้องเป็น 2 เท่าของหน้าเดี่ยว
+                const doubleRatio = pdfRatio * 2;
+                if (maxW / maxH > doubleRatio) {
+                    finalH = maxH;
+                    finalW = maxH * doubleRatio;
+                } else {
+                    finalW = maxW;
+                    finalH = maxW / doubleRatio;
+                }
+            }
+
+            return { 
+                W: Math.floor(finalW), 
+                H: Math.floor(finalH), 
+                single 
+            };
         }
 
         /* ── Fullscreen ──────────────────────────────────── */
@@ -141,8 +186,7 @@
             document.getElementById('fsIcon').innerText = isFull ? '✕' : '⛶';
             document.getElementById('fsText').innerText  = isFull ? 'ออกจากเต็มจอ' : 'เต็มจอ';
 
-            // ดีเลย์รอเบราว์เซอร์จัดการหน้าจอให้เรียบร้อยแล้วค่อยวาดขนาดใหม่
-            setTimeout(reinit, 400);
+            setTimeout(reinit, 300);
         }
 
         ['fullscreenchange','webkitfullscreenchange'].forEach(ev => {
@@ -153,7 +197,7 @@
                     document.getElementById('viewer').classList.remove('fullmode');
                     document.getElementById('fsIcon').innerText = '⛶';
                     document.getElementById('fsText').innerText  = 'เต็มจอ';
-                    setTimeout(reinit, 400);
+                    setTimeout(reinit, 300);
                 }
             });
         });
@@ -176,18 +220,25 @@
             const el = document.getElementById('flipbook');
             const { W, H, single } = bookDims();
 
+            // กำหนดขนาดให้กับ Element พ่อตามที่คำนวณได้จริง ป้องกันการเบี้ยว บีบ แบน
+            el.style.width = W + 'px';
+            el.style.height = H + 'px';
+            el.classList.add('ready');
+
             pageFlip = new St.PageFlip(el, {
-                width:       pdfBaseW, // ใช้สัดส่วนที่ดึงมาจาก PDF โดยตรง
-                height:      pdfBaseH,
-                size:        'stretch',
-                minWidth:    100,
-                maxWidth:    W,        // ยืดได้สูงสุดเท่าขอบเขตหน้าจอในขณะนั้น (ป้องกัน memory ค้าง)
-                minHeight:   100,
-                maxHeight:   H,        // ยืดได้สูงสุดเท่าขอบเขตหน้าจอในขณะนั้น
-                drawShadow:  true,
-                showCover:   true,
+                width: single ? W : Math.floor(W / 2), // ความกว้างต่อหนึ่งหน้ากระดาษ
+                height: H,
+                size: 'stretch',
+                minWidth: 100,
+                maxWidth: W,        
+                minHeight: 100,
+                maxHeight: H,        
+                drawShadow: true,
+                showCover: true,
                 usePortrait: single,
-                startPage:   savedPage
+                startPage: savedPage,
+                clickEventForward: false, // ปิดการส่งอีเวนต์ทะลุผ่านเพื่อล็อกให้ทำงานตามสไตล์ Flipbook
+                useMouseEvents: true     // เปิดให้ผู้ใช้ลาก/ปัดหน้ากระดาษเองได้ด้วยเมาส์หรือนิ้วสัมผัส
             });
 
             pageFlip.on('flip', () => { isFlipping = true; });
@@ -214,17 +265,15 @@
                 const pdf  = await pdfjsLib.getDocument(new Uint8Array(await res.arrayBuffer())).promise;
                 totalPages = pdf.numPages;
 
-                // --- อ่านขนาดกว้าง/ยาว ของ PDF หน้าแรกมาตั้งเป็น Base Size ---
                 const firstPage = await pdf.getPage(1);
                 const baseVp = firstPage.getViewport({ scale: 1 });
                 pdfBaseW = baseVp.width;
                 pdfBaseH = baseVp.height;
-                // -------------------------------------------------------------
 
                 const frag = document.createDocumentFragment();
                 for (let n = 1; n <= totalPages; n++) {
                     const page     = await pdf.getPage(n);
-                    const viewport = page.getViewport({ scale: 2.2 }); // scale ชัดสำหรับจอ Retina
+                    const viewport = page.getViewport({ scale: 2.0 }); // ลดลงเหลือ 2.0 เพื่อประหยัด Memory บนอุปกรณ์พกพา
                     const canvas   = document.createElement('canvas');
                     canvas.width   = viewport.width;
                     canvas.height  = viewport.height;
@@ -236,6 +285,18 @@
 
                     const div = document.createElement('div');
                     div.className = 'page';
+                    
+                    // สั่งให้เมื่อผู้ใช้ 'คลิก' ที่หน้ากระดาษ ให้เปลี่ยนหน้าถัดไป (หรือกลับไปหน้าแรกถ้าจบเล่ม)
+                    div.addEventListener('click', () => {
+                        if (pageFlip) {
+                            if (pageFlip.getCurrentPageIndex() >= totalPages - 1) {
+                                pageFlip.turnToPage(0);
+                            } else {
+                                pageFlip.flipNext();
+                            }
+                        }
+                    });
+
                     div.appendChild(wrap);
                     frag.appendChild(div);
                 }
@@ -290,10 +351,16 @@
             }
         }
 
-        /* ── Orientation ─────────────────────────────────── */
+        /* ── Orientation & Resize ────────────────────────── */
+        // ใช้ดีเลย์สั้นๆ ในการรีเซ็ตเมื่อเกิดการหมุนจอหรือเปลี่ยนขนาดวินโดว์ (ครอบคลุมทั้งเดสก์ท็อปและมือถือ)
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(reinit, 300);
+        });
         window.addEventListener('orientationchange', () => {
-            const nativeFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
-            if (!nativeFS) setTimeout(() => location.reload(), 300);
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(reinit, 300);
         });
 
         window.addEventListener('DOMContentLoaded', () => {
