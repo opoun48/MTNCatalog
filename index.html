@@ -180,20 +180,33 @@
             const { W, H, single } = bookDims();
 
             pageFlip = new St.PageFlip(el, {
-                // กำหนดขนาด Base Size ให้เป็นอัตราส่วนคงที่ (เช่น A4 = 595 x 841)
+                // ตั้งค่าขนาดเริ่มต้นของกระดาษ (อ้างอิงสัดส่วน A4)
                 width:       595,
                 height:      841,
-                // ใช้ 'fit' เพื่อให้ PageFlip ขยายไปตาม Container (หน้าจอ) โดยไม่ทำให้สัดส่วน PDF เพี้ยน
-                size:        'fit',
+                // แก้กลับมาใช้ 'stretch' ตามที่ไลบรารี่รองรับ
+                size:        'stretch',
                 minWidth:    100,
-                maxWidth:    5000,    // ปลดล็อคเพดานขนาด เพื่อให้รองรับจอ iMac (2K/4K/5K)
+                // ปลดล็อคเพดานขนาด เพื่อให้รองรับการยืดบนจอ iMac (2K/4K/5K)
+                maxWidth:    5000,    
                 minHeight:   100,
-                maxHeight:   5000,    // ปลดล็อคเพดานขนาด
+                maxHeight:   5000,    
                 drawShadow:  true,
                 showCover:   true,
                 usePortrait: single,
                 startPage:   savedPage
             });
+
+            pageFlip.on('flip', () => { isFlipping = true; });
+            pageFlip.on('changeState', e => {
+                if (e.data === 'read') {
+                    isFlipping = false;
+                    if (pageFlip.getCurrentPageIndex() >= totalPages - 1) stopAutoFlip();
+                }
+            });
+            pageFlip.on('init', () => { if (onReady) onReady(); });
+
+            pageFlip.loadFromHTML(document.querySelectorAll('#flipbook .page'));
+        }
 
             pageFlip.on('flip', () => { isFlipping = true; });
             pageFlip.on('changeState', e => {
