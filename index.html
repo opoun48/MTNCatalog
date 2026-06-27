@@ -30,7 +30,7 @@
         }
         #overlay.done { opacity: 0; pointer-events: none; }
 
-        /* Viewer */
+        /* Viewer (Flexbox สำหรับจัดให้อยู่กึ่งกลางเสมอ) */
         #viewer {
             position: fixed;
             inset: 0;
@@ -40,18 +40,18 @@
             background: #0f172a;
             opacity: 0;
             transition: opacity 0.3s ease;
-            padding: 20px;
         }
-        #viewer.visible  { opacity: 1; }
-        #viewer.fullmode { padding: 0; }
+        #viewer.visible { opacity: 1; }
 
+        /* ตัวครอบ Flipbook ใช้ CSS Transform ในการย่อขยาย */
         #flipbook { 
-            margin: 0 auto; 
             display: none; 
+            transform-origin: center center;
+            transition: transform 0.15s ease-out; /* ทำให้ตอนย่อขยายสมูทขึ้น */
         }
         #flipbook.ready { display: block; }
         
-        .page { background: white; overflow: hidden; height: 100%; width: 100%; cursor: pointer; }
+        .page { background: white; overflow: hidden; cursor: pointer; }
         .page canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
 
         /* ปุ่มควบคุม */
@@ -100,79 +100,31 @@
         pdfjsLib.GlobalWorkerOptions.workerSrc =
             'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-        // ปรับเปลี่ยนพาธและชื่อไฟล์ PDF ตรงนี้
-        const EBOOK     = "catalog (1).pdf";
+        const EBOOK     = "catalog (1).pdf"; // เปลี่ยนชื่อไฟล์ตรงนี้
         const FLIP_MS   = 5000;
         const PADDING   = 20;
 
-        let pageFlip, autoFlipInterval;
+        let pageFlip;
+        let autoFlipInterval;
         let isPlaying   = false;
         let isFlipping  = false;
         let totalPages  = 0;
         let isFull      = false;
-        let savedPage   = 0;
         
         let pdfBaseW = 595; 
         let pdfBaseH = 841;
-        
-        // ตัวแปรสำคัญ: เก็บ Canvas ที่วาดเสร็จแล้วไว้ ไม่ให้ไลบรารีทำลายทิ้งตอนสลับโหมด
-        let pageCanvases = []; 
+        let bookW = 0;
+        let bookH = 0;
+        let isSingle = false;
 
-        const isIPad = /iPad/i.test(navigator.userAgent) ||
-                       (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
-        /* ── helpers ─────────────────────────────────────── */
-        function viewW() { return window.innerWidth;  }
-        function viewH() { return window.innerHeight; }
-
-        function bookDims() {
-            const pad = isFull ? 0 : PADDING * 2;
-            const maxW = viewW() - pad;
-            const maxH = viewH() - pad;
-            
-            const isPortrait = maxH > maxW;
-            const single = (isIPad && isPortrait) || maxW < 768; 
-
-            const pdfRatio = pdfBaseW / pdfBaseH;
-            let finalW, finalH;
-            
-            if (single) {
-                if (maxW / maxH > pdfRatio) {
-                    finalH = maxH;
-                    finalW = maxH * pdfRatio;
-                } else {
-                    finalW = maxW;
-                    finalH = maxW / pdfRatio;
-                }
-            } else {
-                const doubleRatio = pdfRatio * 2;
-                if (maxW / maxH > doubleRatio) {
-                    finalH = maxH;
-                    finalW = maxH * doubleRatio;
-                } else {
-                    finalW = maxW;
-                    finalH = maxW / doubleRatio;
-                }
-            }
-
-            return { 
-                W: Math.floor(finalW), 
-                H: Math.floor(finalH), 
-                single 
-            };
-        }
-
-        /* ── Fullscreen ──────────────────────────────────── */
+        /* ── Fullscreen (เปลี่ยนมาขยายทั้งหน้าจอหลัก ปลอดภัยสุด) ── */
         function toggleFullscreen() {
-            const viewer = document.getElementById('viewer');
-
+            const docEl = document.documentElement;
             if (!document.fullscreenElement && !document.webkitFullscreenElement) {
                 try {
-                    if (viewer.requestFullscreen) viewer.requestFullscreen();
-                    else if (viewer.webkitRequestFullscreen) viewer.webkitRequestFullscreen();
-                } catch(e) {
-                    console.error("Fullscreen blocked:", e);
-                }
+                    if (docEl.requestFullscreen) docEl.requestFullscreen();
+                    else if (docEl.webkitRequestFullscreen) docEl.webkitRequestFullscreen();
+                } catch(e) { console.error("Fullscreen blocked:", e); }
             } else {
                 try {
                     if (document.exitFullscreen) document.exitFullscreen();
@@ -181,119 +133,41 @@
             }
         }
 
-        ['fullscreenchange','webkitfullscreenchange'].forEach(ev => {
+        ['fullscreenchange', 'webkitfullscreenchange'].forEach(ev => {
             document.addEventListener(ev, () => {
-                const viewer = document.getElementById('viewer');
                 const nativeFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
+                isFull = nativeFS;
+                document.getElementById('fsIcon').innerText = isFull ? '✕' : '⛶';
+                document.getElementById('fsText').innerText  = isFull ? 'ออกจากเต็มจอ' : 'เต็มจอ';
                 
-                if (nativeFS) {
-                    isFull = true;
-                    viewer.classList.add('fullmode');
-                    document.getElementById('fsIcon').innerText = '✕';
-                    document.getElementById('fsText').innerText  = 'ออกจากเต็มจอ';
-                } else {
-                    isFull = false;
-                    viewer.classList.remove('fullmode');
-                    document.getElementById('fsIcon').innerText = '⛶';
-                    document.getElementById('fsText').innerText  = 'เต็มจอ';
-                }
-
-                // ดีเลย์ 400ms รอหน้าจอนิ่งแล้วประกอบร่างหนังสือใหม่
-                setTimeout(reinit, 400);
+                // ไม่มีการ Destroy หนังสืออีกต่อไป แค่สั่งคำนวณสเกลภาพใหม่เท่านั้น!
+                updateScale();
             });
         });
 
-        /* ── Core: Build/Rebuild DOM & PageFlip ──────────── */
-        function initBookDOMAndFlip(onReady) {
-            const flipbookEl = document.getElementById('flipbook');
+        /* ── Scale Updater (คำนวณการซูมหนังสือให้พอดีจอ) ── */
+        function updateScale() {
+            if (!pageFlip) return;
+            const pad = isFull ? 0 : PADDING * 2;
+            const availW = window.innerWidth - pad;
+            const availH = window.innerHeight - pad;
             
-            // 1. ทำลายไลบรารีตัวเก่าทิ้งอย่างปลอดภัย
-            if (pageFlip) {
-                savedPage = pageFlip.getCurrentPageIndex();
-                try { pageFlip.destroy(); } catch(e) {}
-                pageFlip = null;
-            }
-
-            // 2. ล้างข้อมูลกล่องหนังสือเดิมทิ้งเพื่อไม่ให้ขยะตกค้าง
-            flipbookEl.innerHTML = '';
-            flipbookEl.className = ''; 
-
-            // 3. สร้าง HTML ใหม่ โดยดึง Canvas จาก Array ที่เรา Backup ไว้มาใส่
-            const frag = document.createDocumentFragment();
-            pageCanvases.forEach((canvas) => {
-                const wrap = document.createElement('div');
-                wrap.style.cssText = 'width:100%;height:100%;';
-                wrap.appendChild(canvas); // ดึง Canvas เดิมมาใช้งานทันที
-
-                const div = document.createElement('div');
-                div.className = 'page';
-                
-                div.addEventListener('click', () => {
-                    if (pageFlip) {
-                        if (pageFlip.getCurrentPageIndex() >= totalPages - 1) {
-                            pageFlip.turnToPage(0);
-                        } else {
-                            pageFlip.flipNext();
-                        }
-                    }
-                });
-
-                div.appendChild(wrap);
-                frag.appendChild(div);
-            });
-            flipbookEl.appendChild(frag);
-
-            // 4. สั่งเริ่ม PageFlip ตัวใหม่ด้วยโครงสร้างที่สมบูรณ์
-            const { W, H, single } = bookDims();
-            flipbookEl.style.width = W + 'px';
-            flipbookEl.style.height = H + 'px';
-            flipbookEl.classList.add('ready');
-
-            pageFlip = new St.PageFlip(flipbookEl, {
-                width: single ? W : Math.floor(W / 2), 
-                height: H,
-                size: 'stretch',
-                minWidth: 100,
-                maxWidth: W,        
-                minHeight: 100,
-                maxHeight: H,        
-                drawShadow: true,
-                showCover: true,
-                usePortrait: single,
-                startPage: savedPage,
-                clickEventForward: false, 
-                useMouseEvents: true     
-            });
-
-            pageFlip.on('flip', () => { isFlipping = true; });
-            pageFlip.on('changeState', e => {
-                if (e.data === 'read') {
-                    isFlipping = false;
-                    // หยุด Auto Flip ถ้าเปิดไปถึงหน้าสุดท้ายด้วยการคลิกเอง
-                    if (pageFlip.getCurrentPageIndex() >= totalPages - 1 && isPlaying) {
-                        stopAutoFlip();
-                    }
-                }
-            });
-            pageFlip.on('init', () => { if (onReady) onReady(); });
-
-            pageFlip.loadFromHTML(document.querySelectorAll('#flipbook .page'));
+            // หาอัตราส่วนการย่อขยายที่ทำให้หนังสือพอดีกับหน้าจอที่สุด
+            const scale = Math.min(availW / bookW, availH / bookH);
+            
+            const el = document.getElementById('flipbook');
+            el.style.transform = `scale(${scale})`;
         }
 
-        function reinit() {
-            if (!pageCanvases.length) return; // ป้องกันการรีเซ็ตถ้ายังโหลดไฟล์ไม่เสร็จ
-            const wasPlaying = isPlaying;
-            if (wasPlaying) stopAutoFlip();
+        // เมื่อมีการยืดหดหน้าจอ หรือหมุนมือถือ ให้คำนวณสเกลใหม่
+        window.addEventListener('resize', updateScale);
+        window.addEventListener('orientationchange', () => setTimeout(updateScale, 200));
 
-            initBookDOMAndFlip(() => {
-                if (wasPlaying) startAutoFlip();
-            });
-        }
-
-        /* ── Load PDF ────────────────────────────────────── */
+        /* ── Load PDF & Build ── */
         async function loadPDF(url) {
             const overlay = document.getElementById('overlay');
             const viewer  = document.getElementById('viewer');
+            const flipbookEl = document.getElementById('flipbook');
 
             try {
                 const res = await fetch(url);
@@ -307,29 +181,79 @@
                 pdfBaseW = baseVp.width;
                 pdfBaseH = baseVp.height;
 
-                // โหลดและเก็บ Canvas ทุกหน้าลงใน Array (pageCanvases)
+                // กำหนดโหมดหน้ากระดาษ (มือถือจอเล็ก หรือแนวตั้ง ให้เป็นหน้าเดี่ยว)
+                const screenW = window.innerWidth;
+                const screenH = window.innerHeight;
+                isSingle = screenW < 768 || screenH > screenW;
+
+                bookW = isSingle ? pdfBaseW : pdfBaseW * 2;
+                bookH = pdfBaseH;
+
+                const frag = document.createDocumentFragment();
                 for (let n = 1; n <= totalPages; n++) {
                     const page     = await pdf.getPage(n);
-                    const viewport = page.getViewport({ scale: 2.0 }); 
+                    const viewport = page.getViewport({ scale: 2.0 }); // โหลดชัดเผื่อการซูม
                     const canvas   = document.createElement('canvas');
                     canvas.width   = viewport.width;
                     canvas.height  = viewport.height;
                     await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-                    
-                    pageCanvases.push(canvas); // Backup Canvas เก็บไว้ใช้ซ้ำตลอดกาล
-                }
 
-                // เรียกฟังก์ชันประกอบร่างและแสดงผล
-                initBookDOMAndFlip(() => {
-                    requestAnimationFrame(() => {
-                        viewer.classList.add('visible');
-                        overlay.classList.add('done');
-                        overlay.addEventListener('transitionend',
-                            () => overlay.style.display = 'none', { once: true });
-                        document.getElementById('playPauseBtn').classList.remove('hidden');
-                        document.getElementById('fullscreenBtn').classList.remove('hidden');
-                        startAutoFlip();
+                    const div = document.createElement('div');
+                    div.className = 'page';
+                    
+                    // คลิกเพื่อเปลี่ยนหน้า
+                    div.addEventListener('click', () => {
+                        if (pageFlip) {
+                            if (pageFlip.getCurrentPageIndex() >= totalPages - 1) {
+                                pageFlip.turnToPage(0);
+                            } else {
+                                pageFlip.flipNext();
+                            }
+                        }
                     });
+
+                    div.appendChild(canvas);
+                    frag.appendChild(div);
+                }
+                flipbookEl.appendChild(frag);
+
+                // กำหนดขนาดจริงให้กรอบหนังสือ
+                flipbookEl.style.width = bookW + 'px';
+                flipbookEl.style.height = bookH + 'px';
+                flipbookEl.classList.add('ready');
+
+                // เริ่มต้น PageFlip ด้วยขนาด Fixed (ขนาดคงที่ แล้วใช้ CSS ย่อขยายเอา)
+                pageFlip = new St.PageFlip(flipbookEl, {
+                    width: pdfBaseW, 
+                    height: pdfBaseH,
+                    size: 'fixed',
+                    drawShadow: true,
+                    showCover: true,
+                    usePortrait: isSingle,
+                    clickEventForward: false, 
+                    useMouseEvents: true     
+                });
+
+                pageFlip.on('flip', () => { isFlipping = true; });
+                pageFlip.on('changeState', e => {
+                    if (e.data === 'read') {
+                        isFlipping = false;
+                        if (pageFlip.getCurrentPageIndex() >= totalPages - 1 && isPlaying) {
+                            stopAutoFlip();
+                        }
+                    }
+                });
+
+                // ประกอบเสร็จ ให้ปรับสเกลพอดีจอก่อนแสดงผล
+                updateScale();
+
+                requestAnimationFrame(() => {
+                    viewer.classList.add('visible');
+                    overlay.classList.add('done');
+                    overlay.addEventListener('transitionend', () => overlay.style.display = 'none', { once: true });
+                    document.getElementById('playPauseBtn').classList.remove('hidden');
+                    document.getElementById('fullscreenBtn').classList.remove('hidden');
+                    startAutoFlip();
                 });
 
             } catch(err) {
@@ -340,7 +264,7 @@
             }
         }
 
-        /* ── Auto Flip ───────────────────────────────────── */
+        /* ── Auto Flip ── */
         function startAutoFlip() {
             if (autoFlipInterval) clearInterval(autoFlipInterval);
             isPlaying = true; isFlipping = false;
@@ -368,17 +292,6 @@
                 startAutoFlip();
             }
         }
-
-        /* ── Orientation & Resize ────────────────────────── */
-        let resizeTimeout;
-        window.addEventListener('resize', () => {
-            clearTimeout(resizeTimeout);
-            resizeTimeout = setTimeout(reinit, 300);
-        });
-        window.addEventListener('orientationchange', () => {
-            clearTimeout(resizeTimeout);
-            resizeTimeout = setTimeout(reinit, 300);
-        });
 
         window.addEventListener('DOMContentLoaded', () => {
             loadPDF(`ebook/${EBOOK}`);
