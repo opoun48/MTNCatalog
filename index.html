@@ -16,7 +16,6 @@
             width: 100%; height: 100%;
         }
 
-        /* overlay ปิดบังทุกอย่าง — อยู่บนสุด */
         #overlay {
             position: fixed;
             inset: 0;
@@ -39,13 +38,16 @@
             justify-content: center;
             align-items: center;
             padding: 20px;
-            /* ดัน flipbook ออกนอก viewport ระหว่าง init
-               PageFlip ยังเห็น DOM ได้ แต่ผู้ใช้มองไม่เห็น */
             transform: translateX(-99999px);
         }
         #bookContainer.visible {
             transform: none;
-            transition: none; /* snap ทันที ไม่มี slide */
+        }
+
+        /* fullscreen: ไม่มี padding ให้หนังสือเต็มจอ */
+        :fullscreen #bookContainer,
+        :-webkit-full-screen #bookContainer {
+            padding: 0;
         }
 
         #flipbook { margin: 0 auto; }
@@ -53,11 +55,11 @@
         .page canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
 
         #playPauseBtn {
-            position: fixed; top: 20px; right: 160px; z-index: 1000;
+            position: fixed; top: 20px; right: 160px; z-index: 10000;
             backdrop-filter: blur(8px); transition: all 0.2s;
         }
         #fullscreenBtn {
-            position: fixed; top: 20px; right: 20px; z-index: 1000;
+            position: fixed; top: 20px; right: 20px; z-index: 10000;
             backdrop-filter: blur(8px); transition: all 0.2s;
         }
 
@@ -68,7 +70,6 @@
 </head>
 <body>
 
-    <!-- overlay ปิดบัง — แสดงข้อความโหลดอย่างเดียว -->
     <div id="overlay">
         <span id="loadingText" class="text-indigo-400 font-medium text-lg animate-pulse">
             กำลังโหลดแคตตาล็อก...
@@ -87,7 +88,6 @@
         <span id="fsText">เต็มจอ</span>
     </button>
 
-    <!-- flipbook อยู่นอก viewport ระหว่าง init -->
     <div id="bookContainer">
         <div id="flipbook"></div>
     </div>
@@ -100,6 +100,7 @@
         let isAutoPlaying = false;
         let isFlipping    = false;
         let totalPages    = 0;
+        let isFullscreen  = false; // track สถานะ fullscreen
 
         const currentEbook = "catalog (1).pdf";
         const flipSpeed    = 5000;
@@ -110,26 +111,44 @@
         window.addEventListener('DOMContentLoaded', () => {
             loadPDF(`ebook/${currentEbook}`);
             setupFullscreenListener();
-            window.addEventListener('orientationchange', () => setTimeout(() => location.reload(), 300));
+
+            // แก้บัค: reload เฉพาะตอนหมุนจอจริงๆ ไม่ใช่ตอนกด fullscreen
+            window.addEventListener('orientationchange', () => {
+                if (!isFullscreen) {
+                    setTimeout(() => location.reload(), 300);
+                }
+            });
         });
 
+        // ── Fullscreen ──────────────────────────────────────────────
         function toggleFullscreen() {
-            const isFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
-            const el   = document.documentElement;
-            if (!isFS) (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
-            else       (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+            const el = document.documentElement;
+            if (!isFullscreen) {
+                (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+            } else {
+                (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+            }
         }
+
         function setupFullscreenListener() {
             const onChange = () => {
-                const isFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
-                document.getElementById('fsIcon').innerText = isFS ? '✕' : '⛶';
-                document.getElementById('fsText').innerText  = isFS ? 'ออกจากเต็มจอ' : 'เต็มจอ';
-                if (pageFlip) setTimeout(() => pageFlip.update(), 200);
+                isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+
+                document.getElementById('fsIcon').innerText = isFullscreen ? '✕' : '⛶';
+                document.getElementById('fsText').innerText  = isFullscreen ? 'ออกจากเต็มจอ' : 'เต็มจอ';
+
+                // resize PageFlip ให้พอดีจอใหม่หลัง fullscreen เปลี่ยน
+                if (pageFlip) {
+                    setTimeout(() => {
+                        pageFlip.update();
+                    }, 300);
+                }
             };
             document.addEventListener('fullscreenchange',       onChange);
             document.addEventListener('webkitfullscreenchange', onChange);
         }
 
+        // ── Load PDF ────────────────────────────────────────────────
         async function loadPDF(fileUrl) {
             const overlay    = document.getElementById('overlay');
             const flipbookEl = document.getElementById('flipbook');
@@ -186,12 +205,9 @@
                 });
 
                 pageFlip.on('init', () => {
-                    // PageFlip init เสร็จแล้ว (อยู่นอก viewport ผู้ใช้ไม่เห็น)
-                    // snap container กลับเข้าจอ แล้วเปิด overlay ออกใน frame เดียวกัน
                     requestAnimationFrame(() => {
-                        container.classList.add('visible'); // snap กลับ — ไม่มี animation
-                        overlay.classList.add('done');      // fade overlay ออก
-
+                        container.classList.add('visible');
+                        overlay.classList.add('done');
                         overlay.addEventListener('transitionend', () => {
                             overlay.style.display = 'none';
                         }, { once: true });
@@ -212,6 +228,7 @@
             }
         }
 
+        // ── Auto Flip ───────────────────────────────────────────────
         function startAutoFlip() {
             if (autoFlipInterval) clearInterval(autoFlipInterval);
             isAutoPlaying = true; isFlipping = false;
